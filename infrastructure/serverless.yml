@@ -1,0 +1,229 @@
+service: loan-eligibility-engine
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: python3.11
+  region: ${opt:region, 'ap-south-1'}
+  stage: ${opt:stage, 'dev'}
+  memorySize: 256
+  timeout: 30
+
+  environment:
+    STAGE: ${self:provider.stage}
+    S3_BUCKET: ${self:custom.s3Bucket}
+    DB_HOST: ${self:custom.dbHost}
+    DB_NAME: ${self:custom.dbName}
+    DB_SECRET_ARN: !Ref DBSecret
+    N8N_MATCHING_WEBHOOK: ${env:N8N_WEBHOOK_URL, 'http://localhost:5678/webhook/matching'}
+
+  iam:
+    role:
+      statements:
+        # S3 permissions
+        - Effect: Allow
+          Action:
+            - s3:GetObject
+            - s3:PutObject
+            - s3:DeleteObject
+          Resource: arn:aws:s3:::${self:custom.s3Bucket}/*
+        - Effect: Allow
+          Action:
+            - s3:ListBucket
+          Resource: arn:aws:s3:::${self:custom.s3Bucket}
+        # Secrets Manager permissions
+        - Effect: Allow
+          Action:
+            - secretsmanager:GetSecretValue
+          Resource: !Ref DBSecret
+        # SQS permissions
+        - Effect: Allow
+          Action:
+            - sqs:SendMessage
+            - sqs:ReceiveMessage
+            - sqs:DeleteMessage
+            - sqs:GetQueueAttributes
+          Resource:
+            - !GetAtt CsvProcessingQueue.Arn
+            - !GetAtt CsvProcessingDLQ.Arn
+        # SES permissions
+        - Effect: Allow
+          Action:
+            - ses:SendEmail
+            - ses:SendRawEmail
+          Resource: "*"
+
+custom:
+  s3Bucket: loan-eligibility-uploads-${self:provider.stage}
+  dbHost: ${env:DB_HOST, 'localhost'}
+  dbName: ${env:DB_NAME, 'loan_eligibility'}
+  pythonRequirements:
+    dockerizePip: non-linux
+    slim: true
+    layer: true
+
+functions:
+  # API: Generate pre-signed URL for CSV upload
+  uploadInitiator:
+    handler: backend/lambdas/upload_initiator/handler.handler
+    memorySize: 256
+    timeout: 10
+    events:
+      - http:
+          path: /api/upload/initiate
+          method: POST
+          cors: true
+      - http:
+          path: /api/upload/initiate
+          method: OPTIONS
+          cors: true
+
+  # Process CSV files from S3 (SQS triggered)
+  csvProcessor:
+    handler: backend/lambdas/csv_processor/handler.handler
+    memorySize: 1024
+    timeout: 300
+    reservedConcurrency: 5
+    layers:
+      - !Ref PythonRequirementsLambdaLayer
+    events:
+      - sqs:
+          arn: !GetAtt CsvProcessingQueue.Arn
+          batchSize: 1
+
+  # API: Get job status
+  statusHandler:
+    handler: backend/lambdas/status_handler/handler.handler
+    memorySize: 256
+    timeout: 10
+    layers:
+      - !Ref PythonRequirementsLambdaLayer
+    events:
+      - http:
+          path: /api/jobs/{jobId}/status
+          method: GET
+          cors: true
+      - http:
+          path: /api/jobs/{jobId}/status
+          method: OPTIONS
+          cors: true
+
+resources:
+  Resources:
+    # S3 Bucket for CSV uploads
+    UploadsBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${self:custom.s3Bucket}
+        PublicAccessBlockConfiguration:
+          BlockPublicAcls: true
+          BlockPublicPolicy: true
+          IgnorePublicAcls: true
+          RestrictPublicBuckets: true
+        CorsConfiguration:
+          CorsRules:
+            - AllowedHeaders: ['*']
+              AllowedMethods: [GET, PUT, POST]
+              AllowedOrigins: ['*']
+              MaxAge: 3000
+        NotificationConfiguration:
+          EventBridgeConfiguration:
+            EventBridgeEnabled: true
+        LifecycleConfiguration:
+          Rules:
+            - Id: CleanupOldUploads
+              Status: Enabled
+              ExpirationInDays: 30
+              Prefix: uploads/
+
+    # EventBridge Rule for S3 events
+    S3EventRule:
+      Type: AWS::Events::Rule
+      Properties:
+        Name: csv-upload-rule-${self:provider.stage}
+        Description: Route S3 CSV uploads to SQS
+        EventPattern:
+          source:
+            - aws.s3
+          detail-type:
+            - Object Created
+          detail:
+            bucket:
+              name:
+                - ${self:custom.s3Bucket}
+            object:
+              key:
+                - prefix: uploads/
+        Targets:
+          - Id: CsvProcessingQueue
+            Arn: !GetAtt CsvProcessingQueue.Arn
+
+    # SQS Queue for CSV processing
+    CsvProcessingQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: csv-processing-${self:provider.stage}
+        VisibilityTimeout: 1800
+        MessageRetentionPeriod: 86400
+        RedrivePolicy:
+          deadLetterTargetArn: !GetAtt CsvProcessingDLQ.Arn
+          maxReceiveCount: 3
+
+    # Dead Letter Queue
+    CsvProcessingDLQ:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: csv-processing-dlq-${self:provider.stage}
+        MessageRetentionPeriod: 1209600
+
+    # SQS Policy for EventBridge
+    CsvQueuePolicy:
+      Type: AWS::SQS::QueuePolicy
+      Properties:
+        Queues:
+          - !Ref CsvProcessingQueue
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: events.amazonaws.com
+              Action: sqs:SendMessage
+              Resource: !GetAtt CsvProcessingQueue.Arn
+              Condition:
+                ArnEquals:
+                  aws:SourceArn: !GetAtt S3EventRule.Arn
+
+    # Secrets Manager for DB credentials
+    DBSecret:
+      Type: AWS::SecretsManager::Secret
+      Properties:
+        Name: loan-eligibility-db-${self:provider.stage}
+        Description: Database credentials for Loan Eligibility Engine
+        GenerateSecretString:
+          SecretStringTemplate: '{"username": "postgres"}'
+          GenerateStringKey: password
+          PasswordLength: 32
+          ExcludePunctuation: true
+
+  Outputs:
+    ApiEndpoint:
+      Description: API Gateway endpoint URL
+      Value: !Sub https://${ApiGatewayRestApi}.execute-api.${AWS::Region}.amazonaws.com/${self:provider.stage}
+    S3Bucket:
+      Description: S3 Bucket for uploads
+      Value: !Ref UploadsBucket
+    ProcessingQueue:
+      Description: SQS Queue for CSV processing
+      Value: !Ref CsvProcessingQueue
+
+plugins:
+  - serverless-python-requirements
+
+package:
+  individually: true
+  patterns:
+    - '!**/*'
+    - 'backend/lambdas/**'
+    - 'backend/lib/**'
