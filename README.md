@@ -494,4 +494,4 @@ MIT License - See [LICENSE](LICENSE) for details.
 
 ## Author
 
-Built with care for the ClickPe Backend Internship Assignment.
+Built with care.
