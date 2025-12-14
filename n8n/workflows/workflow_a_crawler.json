@@ -1,0 +1,100 @@
+{
+  "name": "Loan Product Crawler",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{"field": "cronExpression", "expression": "0 2 * * *"}]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Daily Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "values": {
+          "object": [
+            {
+              "name": "sites",
+              "value": [
+                {"name": "BankBazaar", "url": "https://www.bankbazaar.com/personal-loan.html"},
+                {"name": "PaisaBazaar", "url": "https://www.paisabazaar.com/personal-loan/"},
+                {"name": "Moneycontrol", "url": "https://www.moneycontrol.com/personal-finance/loans/personal-loan"}
+              ]
+            }
+          ]
+        }
+      },
+      "id": "set-sites",
+      "name": "Set Target Sites",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "sites",
+        "options": {}
+      },
+      "id": "split-sites",
+      "name": "Split Sites",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {"timeout": 30000}
+      },
+      "id": "fetch-page",
+      "name": "Fetch Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract loan products from HTML\nconst html = $input.item.json.data || '';\nconst siteName = $input.item.json.name;\n\n// Simple extraction - in production, use site-specific selectors\nconst products = [];\n\n// Log for monitoring\nconsole.log(`Processing ${siteName}, HTML length: ${html.length}`);\n\n// Return crawl status\nreturn {\n  json: {\n    site_name: siteName,\n    status: html.length > 0 ? 'SUCCESS' : 'FAILED',\n    products_found: products.length,\n    crawled_at: new Date().toISOString()\n  }\n};"
+      },
+      "id": "extract-products",
+      "name": "Extract Products",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO crawl_runs (site_name, site_url, status, products_found, run_at) VALUES ('{{ $json.site_name }}', '{{ $json.site_url }}', '{{ $json.status }}', {{ $json.products_found }}, NOW())",
+        "options": {}
+      },
+      "id": "log-crawl",
+      "name": "Log Crawl Run",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1340, 300]
+    }
+  ],
+  "connections": {
+    "Daily Schedule": {
+      "main": [[{"node": "Set Target Sites", "type": "main", "index": 0}]]
+    },
+    "Set Target Sites": {
+      "main": [[{"node": "Split Sites", "type": "main", "index": 0}]]
+    },
+    "Split Sites": {
+      "main": [[{"node": "Fetch Page", "type": "main", "index": 0}]]
+    },
+    "Fetch Page": {
+      "main": [[{"node": "Extract Products", "type": "main", "index": 0}]]
+    },
+    "Extract Products": {
+      "main": [[{"node": "Log Crawl Run", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {"executionOrder": "v1"}
+}

@@ -1,0 +1,95 @@
+{
+  "name": "User Notification",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "notify",
+        "options": {}
+      },
+      "id": "webhook-notify",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "notify"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM get_matches_for_notification('{{ $json.batch_id }}'::uuid)",
+        "options": {}
+      },
+      "id": "get-matches",
+      "name": "Get Matches",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst userMatches = {};\n\nfor (const item of items) {\n  const userId = item.json.user_id;\n  if (!userMatches[userId]) {\n    userMatches[userId] = {\n      user_id: userId,\n      user_name: item.json.user_name,\n      user_email: item.json.user_email,\n      matches: []\n    };\n  }\n  userMatches[userId].matches.push({\n    provider: item.json.provider_name,\n    product: item.json.product_name,\n    rate_min: item.json.interest_rate_min,\n    rate_max: item.json.interest_rate_max,\n    amount_min: item.json.loan_amount_min,\n    amount_max: item.json.loan_amount_max,\n    score: item.json.match_score\n  });\n}\n\nreturn Object.values(userMatches).map(u => ({ json: u }));"
+      },
+      "id": "group-by-user",
+      "name": "Group by User",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const user = $input.item.json;\nconst matches = user.matches.sort((a, b) => b.score - a.score).slice(0, 5);\n\nlet html = `<h2>Hello ${user.user_name}!</h2>\n<p>Great news! Based on your profile, we found ${matches.length} loan products you may qualify for:</p>\n<table border=\"1\" cellpadding=\"10\" style=\"border-collapse: collapse;\">\n<tr><th>Provider</th><th>Product</th><th>Interest Rate</th><th>Loan Amount</th><th>Match Score</th></tr>`;\n\nfor (const m of matches) {\n  html += `<tr>\n    <td>${m.provider}</td>\n    <td>${m.product}</td>\n    <td>${m.rate_min}% - ${m.rate_max}%</td>\n    <td>₹${m.amount_min.toLocaleString()} - ₹${m.amount_max.toLocaleString()}</td>\n    <td>${m.score}%</td>\n  </tr>`;\n}\n\nhtml += `</table>\n<p>Best regards,<br>Loan Eligibility Engine</p>`;\n\nreturn {\n  json: {\n    to: user.user_email,\n    subject: `🎉 ${matches.length} Personal Loan Offers for You!`,\n    html: html,\n    user_id: user.user_id\n  }\n};"
+      },
+      "id": "generate-email",
+      "name": "Generate Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "toAddresses": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "body": "={{ $json.html }}",
+        "options": {}
+      },
+      "id": "send-email",
+      "name": "Send Email (SES)",
+      "type": "n8n-nodes-base.awsSes",
+      "typeVersion": 1,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE user_product_matches SET is_notified = true, notification_sent_at = NOW() WHERE user_id = '{{ $json.user_id }}'::uuid AND is_notified = false",
+        "options": {}
+      },
+      "id": "mark-notified",
+      "name": "Mark Notified",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1340, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [[{"node": "Get Matches", "type": "main", "index": 0}]]
+    },
+    "Get Matches": {
+      "main": [[{"node": "Group by User", "type": "main", "index": 0}]]
+    },
+    "Group by User": {
+      "main": [[{"node": "Generate Email", "type": "main", "index": 0}]]
+    },
+    "Generate Email": {
+      "main": [[{"node": "Send Email (SES)", "type": "main", "index": 0}]]
+    },
+    "Send Email (SES)": {
+      "main": [[{"node": "Mark Notified", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {"executionOrder": "v1"}
+}
