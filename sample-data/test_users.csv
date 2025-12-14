@@ -1,0 +1,13 @@
+user_id,name,email,monthly_income,credit_score,employment_status,age
+550e8400-e29b-41d4-a716-446655440001,Rahul Sharma,rahul.sharma@example.com,75000,780,Salaried,32
+550e8400-e29b-41d4-a716-446655440002,Priya Patel,priya.patel@example.com,45000,720,Salaried,28
+550e8400-e29b-41d4-a716-446655440003,Amit Kumar,amit.kumar@example.com,120000,810,Salaried,45
+550e8400-e29b-41d4-a716-446655440004,Sneha Reddy,sneha.reddy@example.com,35000,680,Self-Employed,35
+550e8400-e29b-41d4-a716-446655440005,Vikram Singh,vikram.singh@example.com,90000,750,Business,40
+550e8400-e29b-41d4-a716-446655440006,Anjali Gupta,anjali.gupta@example.com,55000,700,Salaried,30
+550e8400-e29b-41d4-a716-446655440007,Raj Malhotra,raj.malhotra@example.com,200000,850,Business,50
+550e8400-e29b-41d4-a716-446655440008,Neha Joshi,neha.joshi@example.com,28000,650,Salaried,25
+550e8400-e29b-41d4-a716-446655440009,Karan Verma,karan.verma@example.com,60000,730,Self-Employed,38
+550e8400-e29b-41d4-a716-446655440010,Pooja Agarwal,pooja.agarwal@example.com,40000,690,Salaried,29
+550e8400-e29b-41d4-a716-446655440011,Invalid User,invalid-email,abc,999,Unknown,15
+550e8400-e29b-41d4-a716-446655440012,Test Edge,test@edge.com,15000,600,Salaried,22
